@@ -1,0 +1,73 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+#
+# One free web service, nothing else. There's no `databases:` section here
+# on purpose: data goes to an external Neon Postgres (DATABASE_URL below),
+# not Render's own Postgres — Render's free Postgres instances expire
+# after 30 days, Neon's free tier doesn't.
+#
+# The Telegram bot itself also runs inside this one service, over a
+# webhook (see backend/app/telegram_bot.py) instead of as a separate
+# background-worker process — Render's free tier has no free instance
+# type for background workers, only for web services, static sites,
+# Postgres, and Key Value (https://render.com/docs/free). Running
+# everything as one free web service is what makes the whole stack
+# actually free.
+#
+# Setup:
+#   1. Create a Neon project at neon.tech, grab its connection string —
+#      the DIRECT one (no "-pooler" in the hostname), not the pooled one.
+#      Paste it in as DATABASE_URL when Render prompts for it below.
+#      Whatever sslmode=.../channel_binding=... Neon's dashboard adds is
+#      fine to leave in as-is — the backend strips and translates those
+#      itself (see backend/app/database.py).
+#   2. Get a bot token from @BotFather, paste it in as TELEGRAM_BOT_TOKEN.
+#   3. Find your own Telegram numeric ID via @userinfobot, paste it into
+#      ADMIN_TELEGRAM_IDS as a JSON array, e.g. [123456789] — this is who
+#      gets into the bot-owner admin panel (see app/api/routes_admin.py).
+#   4. Push this repo to GitHub, then in the Render dashboard:
+#      New -> Blueprint -> pick this repo -> Apply.
+#   5. First deploy registers the Telegram webhook automatically on
+#      startup (see the lifespan hook in backend/app/main.py) — no manual
+#      setWebhook call needed. Add the bot to a Telegram group and run
+#      /start there to get the join button.
+#
+# Free-tier tradeoff worth knowing: a free web service spins down after
+# 15 minutes with no traffic and takes a few seconds to wake back up on
+# the next request (or Telegram update) — see https://render.com/docs/free.
+# Fine for a friend-group game; upgrade the instance type if that
+# cold-start delay ever matters.
+
+services:
+  - type: web
+    name: mafia-backend
+    runtime: python
+    plan: free
+    buildCommand: "pip install -r backend/requirements.txt"
+    startCommand: "cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /health
+    envVars:
+      # Without this, Render defaults to the newest Python (3.14), for which
+      # pydantic-core has no prebuilt wheel yet — pip then tries to compile
+      # it from source via cargo/maturin, which fails because the free-tier
+      # build filesystem is read-only for the cargo cache. 3.12 has wheels
+      # for every dependency here, so nothing gets compiled.
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_WEBHOOK_ENABLED
+        value: "true"
+      - key: TELEGRAM_WEBHOOK_SECRET
+        generateValue: true
+      - key: ADMIN_TELEGRAM_IDS
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: SESSION_TTL_SECONDS
+        value: "43200"
+      - key: CORS_ORIGINS
+        value: '["*"]'
+      - key: ENVIRONMENT
+        value: production
